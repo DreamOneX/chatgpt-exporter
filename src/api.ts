@@ -301,6 +301,7 @@ export interface ApiConversations {
     limit: number
     offset: number
     total: number | null
+    cursor?: string | null
 }
 
 /// "Gizmos" are what OpenAI calls "projects" or other GPTs in the UI
@@ -402,7 +403,7 @@ const conversationApi = (id: string) => urlcat(apiUrl, '/conversation/:id', { id
 const conversationsApi = (offset: number, limit: number) => urlcat(apiUrl, '/conversations', { offset, limit })
 const fileDownloadApi = (id: string) => urlcat(apiUrl, '/files/download/:id', { id, post_id: '', inline: false })
 const projectsApi = (cursor: number | null) => urlcat(apiUrl, '/gizmos/snorlax/sidebar', { conversations_per_gizmo: 0, cursor })
-const projectConversationsApi = (gizmo: string, offset: number, limit: number) => urlcat(apiUrl, '/gizmos/:gizmo/conversations', { gizmo, cursor: offset, limit })
+const projectConversationsApi = (gizmo: string, cursor: string | number, limit: number) => urlcat(apiUrl, '/gizmos/:gizmo/conversations', { gizmo, cursor, limit })
 const accountsCheckApi = urlcat(apiUrl, '/accounts/check/v4-2023-04-27')
 
 export async function getCurrentChatId(): Promise<string> {
@@ -534,15 +535,16 @@ async function fetchConversations(offset = 0, limit = 20, project: string | null
     return fetchApi(url)
 }
 
-async function fetchProjectConversations(project: string, offset = 0, limit = 20): Promise<ApiConversations> {
-    const url = projectConversationsApi(project, offset, limit)
-    const { items } = await fetchApi< { items: ApiConversationItem[]; cursor: number | null }>(url)
+async function fetchProjectConversations(project: string, cursor: string | number = 0, limit = 20): Promise<ApiConversations> {
+    const url = projectConversationsApi(project, cursor, limit)
+    const { items, cursor: nextCursor } = await fetchApi<{ items: ApiConversationItem[]; cursor: string | null }>(url)
     return {
         has_missing_conversations: false,
         items,
         limit,
-        offset,
+        offset: typeof cursor === 'number' ? cursor : 0,
         total: null,
+        cursor: nextCursor ?? null,
     }
 }
 
@@ -550,11 +552,12 @@ export async function fetchAllConversations(project: string | null = null, maxCo
     const conversations: ApiConversationItem[] = []
     const limit = project === null ? 100 : 50 // gizmos api uses a smaller limit
     let offset = 0
+    let cursor: string | number = 0 // project conversations use alphanumeric cursors
     while (true) {
         try {
             const result = project === null
                 ? await fetchConversations(offset, limit)
-                : await fetchProjectConversations(project, offset, limit)
+                : await fetchProjectConversations(project, cursor, limit)
             if (!result.items) {
                 // Handle potential API errors or empty responses
                 console.warn('fetchAllConversations received no items at offset:', offset)
@@ -562,10 +565,18 @@ export async function fetchAllConversations(project: string | null = null, maxCo
             }
             conversations.push(...result.items)
             if (result.items.length === 0) break
+            // Stop if the API signals no more pages (no total count and no next cursor)
+            if (result.total == null && result.cursor == null) break
             // Stop if we've reached the total reported by the API OR the user-defined limit
             if (result.total !== null && offset + limit >= result.total) break
             if (conversations.length >= maxConversations) break
-            offset += limit
+            // Use the alphanumeric cursor for project conversations, fall back to numeric offset otherwise
+            if (result.cursor != null) {
+                cursor = result.cursor
+            }
+            else {
+                offset += limit
+            }
         }
         catch (error) {
             console.error('Error fetching conversations batch:', error)
