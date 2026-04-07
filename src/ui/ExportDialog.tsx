@@ -50,7 +50,7 @@ const ProjectSelect: FC<ProjectSelectProps> = ({ projects, selected, setSelected
     )
 }
 
-const EXPORT_LIMIT = 100
+const EXPORT_LIMIT = 1000
 
 interface ConversationSelectProps {
     conversations: ApiConversationItem[]
